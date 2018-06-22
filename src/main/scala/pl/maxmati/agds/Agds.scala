@@ -2,10 +2,10 @@ package pl.maxmati.agds
 
 import java.lang.reflect.Field
 
-import pl.maxmati.agds.loader.{Iris, Loader}
+import pl.maxmati.agds.loader.Loader
 
-import scala.collection.{SortedSet, mutable}
-import scala.collection.mutable.Queue
+import scala.collection.SortedSet
+import scala.util.Random
 
 
 /**
@@ -14,23 +14,24 @@ import scala.collection.mutable.Queue
 
 abstract class AgdsConnected {
   var x = 0d
-
-  def process(): List[AgdsConnected]
 }
 
 case class AgdsRow[A](row: A, var entries: List[AgdsEntry[A]]) extends
   AgdsConnected {
-  override def process(): List[AgdsConnected] = {
-    val toProcess = entries.map { entry =>
+  def process(): Unit = {
+    entries.foreach { entry =>
       entry.disconnect(this)
       entry.x += x * 1
-      entry
+      entry.process(forward = true, backward = true)
     }
-    entries = List()
-    toProcess
+    entries.foreach(_.connect(this))
   }
 
   entries.foreach(_.connect(this))
+
+  override def toString: String = {
+    s"$x: ${row.toString} – ${entries.size}"
+  }
 }
 
 case class AgdsEntry[A](value: Double, column: AgdsColumn[A])
@@ -43,31 +44,28 @@ case class AgdsEntry[A](value: Double, column: AgdsColumn[A])
   var prev: Option[AgdsEntry[A]] = None
   var next: Option[AgdsEntry[A]] = None
 
-  override def process(): List[AgdsConnected] = {
-    val toProcess = (prev.map { entry =>
-      entry.next = None
-      val dif = Math.abs(value - entry.value)
-      val weight = 1d - (dif / column.range())
-      entry.x += x * weight
-      entry
-    }.iterator ++ next.map { entry =>
-      entry.prev = None
-      val dif = Math.abs(value - entry.value)
-      val weight = 1d - (dif / column.range())
-      entry.x += x * weight
-      entry
-    }.iterator).toList
-
-    rows.foreach { row =>
-      row.entries = row.entries diff List(this)
-      row.x += x * 1d / 5d
+  def process(forward: Boolean, backward: Boolean): Unit = {
+    if (forward) {
+      next.foreach { entry =>
+        val dif = Math.abs(value - entry.value)
+        val weight = 1d - (dif / column.range())
+        entry.x += x * weight
+        entry.process(forward = true, backward = false)
+      }
     }
 
-    prev = None
-    next = None
-    rows = Set()
+    if(backward){
+      prev.foreach { entry =>
+        val dif = Math.abs(value - entry.value)
+        val weight = 1d - (dif / column.range())
+        entry.x += x * weight
+        entry.process(forward = false, backward = true)
+      }
+    }
 
-    toProcess
+    rows.foreach { row =>
+      row.x += x * 1d / 5d //TODO:
+    }
   }
 
   override def compare(that: AgdsEntry[A]): Int = value.compare(that.value)
@@ -77,10 +75,8 @@ case class AgdsEntry[A](value: Double, column: AgdsColumn[A])
   def disconnect(row: AgdsRow[A]): Unit = rows -= row
 }
 
-class AgdsColumn[A]() {
+class AgdsColumn[A](discrete: Boolean) {
   def find(value: Double): AgdsEntry[A] = entries.find(_.value == value).get
-
-  //TODO: proper agds find
 
   private var entries = SortedSet[AgdsEntry[A]]()
 
@@ -89,9 +85,11 @@ class AgdsColumn[A]() {
   }
 
   def build(): Unit = {
-    entries.sliding(2).foreach { pair =>
-      pair.head.next = Some(pair.last)
-      pair.last.prev = Some(pair.head)
+    if (!discrete) {
+      entries.sliding(2).foreach { pair =>
+        pair.head.next = Some(pair.last)
+        pair.last.prev = Some(pair.head)
+      }
     }
     entries.foreach(_.build())
   }
@@ -106,16 +104,13 @@ class AgdsColumn[A]() {
 
 class Agds[A](rawRows: List[A])(implicit m: Manifest[A]) {
   def calculate(rawRow: A): Unit = {
-    var toProcess = mutable.Queue[AgdsConnected]()
-
     val row = rows.filter(_.row == rawRow).head
     row.x = 1
-    toProcess ++= row.process()
+    row.process()
+  }
 
-    while (toProcess.nonEmpty) {
-      val item = toProcess.dequeue()
-      toProcess ++= item.process()
-    }
+  def getRows(): List[AgdsRow[A]] = {
+    rows
   }
 
   private def getField(field: Field, row: A): Double = {
@@ -125,7 +120,8 @@ class Agds[A](rawRows: List[A])(implicit m: Manifest[A]) {
 
   private val columns: Map[String, AgdsColumn[A]]
   = m.runtimeClass.getDeclaredFields
-    .map(field => field.getName -> new AgdsColumn[A])
+    .map(field => field.getName ->
+      new AgdsColumn[A](field.getType == classOf[Int]))
     .toMap
 
   rawRows.foreach { row =>
@@ -147,8 +143,10 @@ class Agds[A](rawRows: List[A])(implicit m: Manifest[A]) {
 }
 
 object Main extends App {
-  val data = new Loader().loadIris()
+  val data = Random.shuffle(new Loader().loadIris()).slice(1,150)
   val agds = new Agds(data)
   agds.calculate(data.head)
+  agds.getRows().sortBy(_.x).reverse.foreach(println(_))
+
   print(data.head)
 }

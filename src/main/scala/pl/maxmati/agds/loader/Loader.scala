@@ -3,7 +3,6 @@ package pl.maxmati.agds.loader
 import java.io.File
 import kantan.csv._
 import kantan.csv.ops._
-import kantan.csv.generic._
 
 /**
   * Created by maxmati on 5/26/18 
@@ -33,5 +32,4 @@ object Iris {
 }
 
 case class Iris(sepalLength: Double, sepalWidth: Double, petalLength: Double,
-                petalWidth: Double, classId: Int) { // TODO: get back to Option
-}
+                petalWidth: Double, classId: Int)
